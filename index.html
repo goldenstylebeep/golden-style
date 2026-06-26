@@ -1350,5 +1350,161 @@ window.addEventListener('scroll',()=>{
   else nav.style.borderBottomColor='rgba(212,168,67,0.2)';
 });
 </script>
-</body>
+<!-- ===== FORMULARIO DATOS CLIENTE (pegar DENTRO del modal del carrito, antes de los botones de pago) ===== -->
+<!-- Busca en tu HTML el div del carrito y agrega esto antes de los botones Yape/Efectivo/etc -->
+
+<style>
+  #gs-form-cliente { display:flex; flex-direction:column; gap:8px; margin:12px 0; }
+  #gs-form-cliente input {
+    padding:10px 12px; border-radius:8px; border:1px solid #ddd;
+    font-size:14px; font-family:inherit; width:100%; box-sizing:border-box;
+  }
+  #gs-form-cliente input:focus { outline:2px solid #c9a84c; border-color:#c9a84c; }
+</style>
+
+<script>
+// ====================================================
+// GOLDEN STYLE — Integración Google Sheets ERP
+// URL del Apps Script
+// ====================================================
+const GS_SHEET_URL = "https://script.google.com/macros/s/AKfycbzFosuHw9uCu9Eq1wFMFIZ6v0aIc55g_910Q8ZvtWGW7azKnRnlEE20CyoEjFGmYvP8VQ/exec";
+
+// Inyecta el formulario de cliente en el carrito cuando el DOM esté listo
+document.addEventListener("DOMContentLoaded", () => {
+
+  // Busca el contenedor del carrito (ajusta el selector si es necesario)
+  const carritoModal = document.querySelector(".cart-modal, #cart-modal, [id*='cart'], [class*='cart-sidebar'], [class*='carrito']");
+
+  if (carritoModal) {
+    // Crea el formulario de datos
+    const form = document.createElement("div");
+    form.id = "gs-form-cliente";
+    form.innerHTML = `
+      <input id="gs-nombre"    type="text"  placeholder="👤 Nombre completo *" autocomplete="name">
+      <input id="gs-telefono"  type="tel"   placeholder="📱 Teléfono / WhatsApp *" autocomplete="tel">
+      <input id="gs-direccion" type="text"  placeholder="📍 Dirección de entrega" autocomplete="street-address">
+      <input id="gs-ciudad"    type="text"  placeholder="🏙️ Ciudad / Distrito" autocomplete="address-level2">
+    `;
+
+    // Inserta el formulario antes de los botones de método de pago
+    // Busca el primer botón de pago para insertar antes
+    const pagoSection = carritoModal.querySelector("[class*='pago'], [class*='payment'], button");
+    if (pagoSection) {
+      carritoModal.insertBefore(form, pagoSection);
+    } else {
+      carritoModal.prepend(form);
+    }
+  }
+
+  // Intercepta el botón CONFIRMAR PEDIDO
+  // Usamos MutationObserver por si el botón se renderiza dinámicamente
+  const observer = new MutationObserver(() => {
+    const btnConfirmar = [...document.querySelectorAll("button")].find(b =>
+      b.textContent.includes("CONFIRMAR PEDIDO") || b.textContent.includes("CONFIRMAR")
+    );
+
+    if (btnConfirmar && !btnConfirmar.dataset.gsHooked) {
+      btnConfirmar.dataset.gsHooked = "1";
+
+      btnConfirmar.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        await enviarPedidoASheet();
+      });
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // También intento directo por si el botón ya existe
+  setTimeout(() => {
+    const btnConfirmar = [...document.querySelectorAll("button")].find(b =>
+      b.textContent.includes("CONFIRMAR PEDIDO") || b.textContent.includes("CONFIRMAR")
+    );
+    if (btnConfirmar && !btnConfirmar.dataset.gsHooked) {
+      btnConfirmar.dataset.gsHooked = "1";
+      btnConfirmar.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        await enviarPedidoASheet();
+      });
+    }
+  }, 1500);
+});
+
+async function enviarPedidoASheet() {
+  // Leer datos del formulario
+  const nombre    = document.getElementById("gs-nombre")?.value.trim()    || "";
+  const telefono  = document.getElementById("gs-telefono")?.value.trim()  || "";
+  const direccion = document.getElementById("gs-direccion")?.value.trim() || "";
+  const ciudad    = document.getElementById("gs-ciudad")?.value.trim()    || "";
+
+  if (!nombre || !telefono) {
+    alert("⚠️ Por favor ingresa tu nombre y teléfono para confirmar el pedido.");
+    document.getElementById("gs-nombre")?.focus();
+    return;
+  }
+
+  // Leer método de pago activo (busca el botón con clase activa o seleccionado)
+  const metodoPago = (() => {
+    const activo = document.querySelector(".pago-activo, .payment-active, [class*='pago'].activo, [class*='active']");
+    if (activo) return activo.textContent.trim();
+    // Fallback: busca los botones de pago conocidos
+    const btns = ["Yape", "Plin", "Efectivo", "Transferencia", "Contra entrega"];
+    for (const t of btns) {
+      const b = [...document.querySelectorAll("button")].find(x =>
+        x.textContent.includes(t) && (x.classList.contains("active") || x.classList.contains("selected") || x.dataset.selected)
+      );
+      if (b) return t;
+    }
+    return "No especificado";
+  })();
+
+  // Leer items del carrito
+  const productos = (() => {
+    const items = document.querySelectorAll(".cart-item, [class*='cart-item'], [class*='carrito-item']");
+    if (items.length === 0) return "Ver detalle en web";
+    return [...items].map(el => {
+      const nom   = el.querySelector("[class*='name'], [class*='nombre'], h3, h4, p")?.textContent.trim() || "Producto";
+      const cant  = el.querySelector("[class*='qty'], [class*='cantidad'], [class*='quantity']")?.textContent.trim() || "1";
+      const prec  = el.querySelector("[class*='price'], [class*='precio']")?.textContent.trim() || "";
+      return `${nom} x${cant} ${prec}`.trim();
+    }).join(" | ");
+  })();
+
+  // Leer totales
+  const subtotal = document.querySelector("[id*='subtotal'], [class*='subtotal']")?.textContent.trim() || "";
+  const igv      = document.querySelector("[id*='igv'], [class*='igv'], [id*='tax']")?.textContent.trim() || "";
+  const total    = document.querySelector("[id*='total'], [class*='total']")?.textContent.trim() || "";
+
+  const payload = { nombre, telefono, direccion, ciudad, metodoPago, productos, subtotal, igv, total };
+
+  // Mostrar estado de carga
+  const btnConfirmar = [...document.querySelectorAll("button")].find(b =>
+    b.textContent.includes("CONFIRMAR") && b.dataset.gsHooked
+  );
+  const textoOriginal = btnConfirmar?.textContent;
+  if (btnConfirmar) { btnConfirmar.textContent = "⏳ Registrando pedido..."; btnConfirmar.disabled = true; }
+
+  try {
+    await fetch(GS_SHEET_URL, {
+      method: "POST",
+      mode: "no-cors",   // Requerido por Google Apps Script
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    alert(`✅ ¡Pedido registrado exitosamente!\n\nNos contactaremos al ${telefono} para coordinar el envío. ¡Gracias ${nombre}! 🙌`);
+
+    // Aquí puedes llamar a tu función original de WhatsApp si la tienes
+    // window.confirmarPedidoOriginal?.();
+
+  } catch (err) {
+    console.error("Error Google Sheets:", err);
+    alert("⚠️ Pedido enviado pero hubo un error al registrar. Guarda tu número de WhatsApp para seguimiento.");
+  } finally {
+    if (btnConfirmar) { btnConfirmar.textContent = textoOriginal; btnConfirmar.disabled = false; }
+  }
+}
+</script></body>
 </html>
